@@ -3,9 +3,13 @@ import type { EngineInterface, Register, ThemeSetArgs } from 'claude-code'
 
 import { makeColors } from './make-colors.js'
 import { scene } from './scene'
+import { choose, keep, NONE, release, themeFor } from './theme-choice'
 
+const THEME = 'starry-canyon'
 const SCENE = 'grand-canyon-milky-way'
 const COMMAND = 'starry'
+// This mod's own on/off, from before theme mods shared a choice: it decides
+// only until any theme mod saves one, and is kept in step after.
 const ENABLED_KEY = 'enabled'
 
 // The moon moves in steps of 2% of the context window, so the backdrop is
@@ -60,8 +64,14 @@ function phaseName(percent: number): string {
             : 'full'
 }
 
+/**
+ * Whether this session wears Starry Canyon: its own pin, else the default for
+ * new sessions, both shared with other theme mods.
+ */
 async function isEnabled($: EngineInterface): Promise<boolean> {
-  return (await $.store.get(ENABLED_KEY)) !== false
+  const before = (await $.store.get(ENABLED_KEY)) !== false ? THEME : NONE
+
+  return (await themeFor($, before)) === THEME
 }
 
 async function applyLook($: EngineInterface): Promise<void> {
@@ -89,9 +99,11 @@ async function setFill($: EngineInterface, percent: number | undefined): Promise
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // The look first, so nothing below can keep the sky from going up.
+    // The look first, so nothing below can keep the sky from going up. The
+    // session is then pinned to it, so it comes back the same on resume.
     if (await isEnabled($)) {
       await applyLook($)
+      await keep($, THEME)
     }
 
     // A resumed session starts with the moon where its context already is.
@@ -153,7 +165,10 @@ export const register: Register = on => {
 
     if (verb === 'preview') {
       if (!wasOn) {
-        return { text: 'Starry Canyon is off. Turn it on with /starry on first.', isTextDisplayOnly: true }
+        return {
+          text: 'Starry Canyon is off in this session. Turn it on with /starry on first.',
+          isTextDisplayOnly: true,
+        }
       }
       const percent = Number(amount)
 
@@ -176,7 +191,7 @@ export const register: Register = on => {
           ? 'no context reading yet; the moon waits at the left as a thin crescent'
           : `the context window is about ${live}% full, and the moon is ${phaseName(live)}`
 
-      return { text: `Starry Canyon is ${wasOn ? 'on' : 'off'}: ${where}.`, isTextDisplayOnly: true }
+      return { text: `Starry Canyon is ${wasOn ? 'on' : 'off'} in this session: ${where}.`, isTextDisplayOnly: true }
     }
 
     const turnOn = verb === 'on' ? true : verb === 'off' ? false : verb === '' ? !wasOn : undefined
@@ -188,25 +203,42 @@ export const register: Register = on => {
       }
     }
 
-    await $.store.set(ENABLED_KEY, turnOn)
-
     if (turnOn) {
       await applyLook($)
+      await choose($, THEME)
+      await $.store.set(ENABLED_KEY, true)
 
       return {
-        text: '✦ Starry Canyon is on, here and in every new session. The moon crosses the sky as the context window fills.',
+        text: '✦ Starry Canyon is on in this session, and new sessions will start with it. Sessions already open keep their own theme. The moon crosses the sky as the context window fills.',
+        isTextDisplayOnly: true,
+      }
+    }
+
+    if (!wasOn) {
+      // This session wears another theme or none: leave it, and only stop
+      // new sessions starting with this one.
+      const wasDefault = await release($, THEME)
+
+      if (wasDefault) {
+        await $.store.set(ENABLED_KEY, false)
+      }
+
+      return {
+        text: wasDefault
+          ? 'Starry Canyon isn’t on in this session, so it stays as it is; new sessions will start without it.'
+          : 'Starry Canyon isn’t on in this session, so nothing changed.',
         isTextDisplayOnly: true,
       }
     }
 
     // Clear only a theme this mod put up: one theme stands per session, and
     // a clear removes whichever does.
-    if (wasOn) {
-      await $.theme.clear()
-    }
+    await $.theme.clear()
+    await choose($, NONE)
+    await $.store.set(ENABLED_KEY, false)
 
     return {
-      text: 'Starry Canyon is off, here and in every new session. Turn it back on with /starry.',
+      text: 'Starry Canyon is off in this session, and new sessions will start without it. Turn it back on with /starry.',
       isTextDisplayOnly: true,
     }
   }).catch(() => ({ text: 'Starry Canyon could not finish that; try /starry again.', isTextDisplayOnly: true }))

@@ -1,6 +1,6 @@
 {
   "name": "starry-canyon",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The Milky Way over the Grand Canyon on a dark-sky night, with a moon that crosses the sky and waxes as the context window fills. Toggle with /starry.",
   "author": { "name": "nilswhite" },
   "homepage": "https://github.com/nilswhite/starry-canyon",

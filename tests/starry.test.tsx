@@ -17,12 +17,33 @@ const reading = (percent?: number) => ({
   percent,
 })
 
-// The engine beneath the plugin: themes and clears are recorded, and the
-// session's usage answers `startAt` until a measurement says otherwise.
-function engine(on: On, startAt?: number) {
+type Saved = { default: string; sessions: Record<string, { theme: string; at: number }> }
+
+// The engine beneath the plugin: themes and clears are recorded, the session's
+// usage answers `startAt` until a measurement says otherwise, the file system
+// is a map, and the session id is the test's to set.
+function engine(on: On, startAt?: number, store: Record<string, unknown> = {}) {
   const themes: ThemeSetArgs[] = []
   const clears: number[] = []
+  const files = new Map<string, string>()
+  const session = { id: 'session-a' }
 
+  on('session.id', () => ({ value: session.id }))
+  on('fs.exists', (_, e) => ({ value: files.has(e.path) }))
+  on('fs.read', (_, e) => {
+    const text = files.get(e.path)
+
+    if (text === undefined) {
+      throw new Error(`ENOENT: ${e.path}`)
+    }
+
+    return { value: text }
+  })
+  on('fs.write', (_, e) => {
+    files.set(e.path, e.text)
+
+    return { value: undefined }
+  })
   on('command.register', () => ({ value: { command: 'starry' } }))
   on('theme.set', (_, e) => {
     themes.push(e)
@@ -38,10 +59,17 @@ function engine(on: On, startAt?: number) {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('command.run', () => ({ text: 'engine' }))
-  mock.store(on)
-  mock.clock(on, { now: 1_000 })
+  mock.store(on, store)
+  const clock = mock.clock(on, { now: 1_000 })
 
-  return { themes, clears }
+  const choicePath = () => [...files.keys()].find(path => path.endsWith('/theme-mods/choice.json'))
+  const saved = (): Saved | undefined => {
+    const path = choicePath()
+
+    return path === undefined ? undefined : (JSON.parse(files.get(path)!) as Saved)
+  }
+
+  return { themes, clears, files, session, clock, choicePath, saved }
 }
 
 const start = ($: Engine) => $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -122,15 +150,19 @@ test('/starry preview pins the moon until the next turn ends', async ($, on) => 
 })
 
 test('/starry toggles the theme off and on, and remembers it', async ($, on) => {
-  const { themes, clears } = engine(on)
+  const { themes, clears, session, saved } = engine(on)
   await start($)
   expect(themes.length).toBe(1)
+  // The session is pinned to the theme it opened with.
+  expect(saved()).toEqual({ default: 'starry-canyon', sessions: { 'session-a': { theme: 'starry-canyon', at: 1_000 } } })
 
   const off = await starry($)
   expect(off.text).toContain('off')
   expect(clears.length).toBe(1)
+  expect(saved()?.default).toBe('none')
 
   // A new session starts without the theme while it is off.
+  session.id = 'session-b'
   await start($)
   expect(themes.length).toBe(1)
 
@@ -141,9 +173,79 @@ test('/starry toggles the theme off and on, and remembers it', async ($, on) => 
   const backOn = await starry($, 'on')
   expect(backOn.text).toContain('on')
   expect(themes.length).toBe(2)
+  expect(saved()?.default).toBe('starry-canyon')
 
   const status = await starry($, 'status')
-  expect(status.text).toContain('Starry Canyon is on')
+  expect(status.text).toContain('Starry Canyon is on in this session')
+})
+
+test('each session keeps its own theme, and new sessions take the last choice', async ($, on) => {
+  const { themes, clears, session, clock, saved } = engine(on)
+
+  // Session A opens with the theme; session B opens with it too and turns it off.
+  await start($)
+  session.id = 'session-b'
+  await clock.advance(1_000)
+  await start($)
+  expect(themes.length).toBe(2)
+  await starry($, 'off')
+  expect(clears.length).toBe(1)
+
+  // Session A, resumed, still wears it; B, resumed, doesn't.
+  session.id = 'session-a'
+  await start($)
+  expect(themes.length).toBe(3)
+  session.id = 'session-b'
+  await start($)
+  expect(themes.length).toBe(3)
+
+  // A brand-new session C takes the last choice: off.
+  session.id = 'session-c'
+  await start($)
+  expect(themes.length).toBe(3)
+
+  // C turns it on: new sessions start with it again, and B keeps its own.
+  await starry($, 'on')
+  session.id = 'session-d'
+  await start($)
+  expect(themes.length).toBe(5)
+  session.id = 'session-b'
+  await start($)
+  expect(themes.length).toBe(5)
+  expect(saved()?.sessions['session-b']?.theme).toBe('none')
+})
+
+test('a session another theme mod pinned is left alone, and off there only changes the default', async ($, on) => {
+  const { themes, clears, files, session, choicePath, saved } = engine(on)
+  await start($)
+
+  const choice = saved()!
+  choice.sessions['session-e'] = { theme: 'electron-vue', at: 500 }
+  files.set(choicePath()!, JSON.stringify(choice))
+
+  session.id = 'session-e'
+  await start($)
+  expect(themes.length).toBe(1)
+  expect((await starry($, 'status')).text).toContain('off in this session')
+
+  const off = await starry($, 'off')
+  expect(off.text).toContain('new sessions will start without it')
+  expect(clears.length).toBe(0)
+  expect(saved()?.default).toBe('none')
+  expect(saved()?.sessions['session-e']?.theme).toBe('electron-vue')
+  expect(saved()?.sessions['session-a']?.theme).toBe('starry-canyon')
+})
+
+test('the on/off saved before theme mods shared a choice still counts until one is saved', async ($, on) => {
+  const { themes, saved } = engine(on, undefined, { enabled: false })
+
+  await start($)
+  expect(themes.length).toBe(0)
+  expect(saved()).toBeUndefined()
+
+  await starry($, 'on')
+  expect(themes.length).toBe(1)
+  expect(saved()?.default).toBe('starry-canyon')
 })
 
 test('another scene is left alone', async ($, on) => {

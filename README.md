@@ -28,12 +28,18 @@ In the Claude desktop app, where `/plugin` doesn't run: click **+** next to the 
 
 | Command | What it does |
 | --- | --- |
-| `/starry` | Toggle the theme on or off |
+| `/starry` | Toggle the theme in this session |
 | `/starry on` / `/starry off` | Turn it on or off explicitly |
-| `/starry status` | Show whether it is on, the context fill and the moon's phase |
+| `/starry status` | Show whether this session wears it, the context fill and the moon's phase |
 | `/starry preview 75` | Show the moon at any fill (0-100) until your next message |
 
-The on/off choice is remembered across sessions.
+## Each session keeps its own theme
+
+Turning the theme on or off sets it for this session and for every session you start afterwards. Sessions already open keep whatever they have, and a session you resume comes back with the theme it last wore. So you can have Starry Canyon in one session and another theme in the next.
+
+`/starry off` in a session that wears another theme leaves that session alone and only stops new sessions starting with Starry Canyon.
+
+The choice lives in `~/.claude/theme-mods/choice.json`, which other theme mods can read too: `default` is what a new session starts with, and `sessions` pins each session to its own theme. [Electron Vue](https://github.com/nilswhite/electron-vue-theme) reads the same file, so switching between the two works the same way in both.
 
 ## Notes
 

@@ -1,0 +1,11 @@
+{
+  "name": "starry-canyon",
+  "owner": { "name": "nilswhite" },
+  "plugins": [
+    {
+      "name": "starry-canyon",
+      "source": "./",
+      "description": "The Milky Way over the Grand Canyon on a dark-sky night, with a moon that crosses the sky and waxes as the context window fills."
+    }
+  ]
+}
